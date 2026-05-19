@@ -1,6 +1,8 @@
 import { BrowserRouter, Routes, Route, NavLink, Navigate, useNavigate, useLocation } from 'react-router-dom'
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import TaskList from './pages/TaskList'
 import PlanList from './pages/PlanList'
 import Profile from './pages/Profile'
@@ -9,6 +11,75 @@ import { useAppStore } from './stores/appStore'
 import { useUserStore } from './stores/userStore'
 import { taskApi, aiApi } from './lib/api'
 import clsx from 'clsx'
+
+// 打字机效果组件（完成后渲染 Markdown）
+function TypewriterText({ text, speed = 15 }) {
+  const [displayed, setDisplayed] = useState('')
+  const [done, setDone] = useState(false)
+  const indexRef = useRef(0)
+
+  useEffect(() => {
+    setDisplayed('')
+    setDone(false)
+    indexRef.current = 0
+
+    const timer = setInterval(() => {
+      if (indexRef.current < text.length) {
+        indexRef.current += 1
+        setDisplayed(text.slice(0, indexRef.current))
+      } else {
+        clearInterval(timer)
+        setDone(true)
+      }
+    }, speed)
+
+    return () => clearInterval(timer)
+  }, [text, speed])
+
+  if (done) {
+    return (
+      <div className="prose prose-invert prose-sm max-w-none">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+      </div>
+    )
+  }
+
+  return (
+    <span className="text-sm text-[#e7d7b7] whitespace-pre-wrap">
+      {displayed}
+      <span className="inline-block w-0.5 h-4 bg-[#d4af37] ml-0.5 animate-pulse" />
+    </span>
+  )
+}
+
+// AI 思考步骤组件
+function ThinkingSteps({ steps }) {
+  if (!steps || steps.length === 0) return null
+
+  const stepIcons = {
+    tool: '🔧',
+    observation: '📋',
+    error: '⚠️',
+    thought: '💭',
+  }
+
+  return (
+    <div className="mb-2 space-y-1">
+      {steps.map((step, idx) => (
+        <div
+          key={idx}
+          className={clsx(
+            'flex items-start gap-1.5 text-[11px] px-2 py-1 rounded',
+            step.type === 'error' ? 'text-red-400/80 bg-red-400/5' : 'text-[#b89b5e]/70'
+          )}
+        >
+          <span className="mt-0.5">{stepIcons[step.type] || '•'}</span>
+          <span className="flex-1 truncate">{step.content}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
 
 const NAV_ITEMS = [
   { name: '任务卷轴', path: '/', icon: '📜' },
@@ -250,7 +321,7 @@ function RightPanel() {
       }
       setMessages((prev) => [
         ...prev,
-        { role: 'ai', content: data.reply },
+        { role: 'ai', content: data.reply, steps: data.steps || [] },
       ])
       setAiInput('')
       // 刷新任务列表（Agent 可能创建了任务）
@@ -411,9 +482,20 @@ function RightPanel() {
                 </div>
               ) : (
                 <div className="flex justify-start">
-                  <div className="max-w-[90%]">
+                  <div className="max-w-[90%] w-full">
                     <div className="bg-[#050505] border border-[#d4af37]/10 rounded-xl rounded-tl-sm px-3 py-2">
-                      <p className="text-sm text-[#e7d7b7] whitespace-pre-wrap">{msg.content}</p>
+                      {/* 思考步骤 */}
+                      {msg.steps && msg.steps.length > 0 && (
+                        <ThinkingSteps steps={msg.steps} />
+                      )}
+                      {/* 最终回复 — 历史消息直接渲染 Markdown，最新消息用打字机 */}
+                      {idx === messages.length - 1 && msg.steps ? (
+                        <TypewriterText text={msg.content} speed={12} />
+                      ) : (
+                        <div className="text-sm text-[#e7d7b7] prose prose-invert prose-sm max-w-none">
+                          <ReactMarkdown>{msg.content}</ReactMarkdown>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>

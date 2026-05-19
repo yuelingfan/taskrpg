@@ -205,10 +205,7 @@ class MemoryManager:
             for cat, info in summary.items()
         ])
 
-        prompt = SYSTEM_PROMPT_QUERY_ROUTE.format(
-            query=query,
-            categories=categories_str,
-        )
+        prompt = SYSTEM_PROMPT_QUERY_ROUTE.replace("{query}", query).replace("{categories}", categories_str)
 
         try:
             response = self.llm.invoke(prompt)

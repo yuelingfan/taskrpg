@@ -103,6 +103,22 @@ def build_tools(db: Session, user_id: int):
         return "[ERROR:complete_user_task] 完成任务失败。"
 
     @tool
+    def delete_user_task(task_id: int) -> str:
+        """删除指定任务及其子任务。"""
+        task = db.query(models.Task).filter(
+            models.Task.id == task_id,
+            models.Task.user_id == user_id
+        ).first()
+        if not task:
+            return f"找不到任务 #{task_id}"
+
+        title = task.title
+        success = crud.delete_task(db, task_id)
+        if success:
+            return f"任务「{title}」已删除。"
+        return "[ERROR:delete_user_task] 删除任务失败。"
+
+    @tool
     def get_user_stats() -> str:
         """获取用户当前等级、经验值和属性。"""
         db_user = crud.get_user(db, user_id)
@@ -147,7 +163,11 @@ def build_tools(db: Session, user_id: int):
     ) -> str:
         """为用户创建一个长期计划（目标拆解）。
         stages_json: JSON 数组字符串，每个元素包含 name, description, tasks。
-        示例: [{"name": "第一阶段", "description": "基础准备", "tasks": [{"title": "任务1", "description": "...", "task_type": "learning"}]}]
+        每个 task 必须包含 title 和 deadline（YYYY-MM-DD 格式）。
+        示例: [{"name": "第1周", "description": "基础阶段", "tasks": [
+          {"title": "背完高频词汇", "deadline": "2026-05-26", "task_type": "learning"},
+          {"title": "做两套真题", "deadline": "2026-05-30", "task_type": "learning"}
+        ]}]
         """
         try:
             import json
@@ -169,12 +189,29 @@ def build_tools(db: Session, user_id: int):
             )
             plan = crud.create_plan(db, plan_data)
 
-            # 自动为每个阶段的任务创建 Task 记录
+            # 先创建主任务（代表整个计划，可展开查看子任务）
+            total_exp = sum(
+                task_info.get("exp_reward", 10)
+                for stage in stages_data
+                for task_info in stage.get("tasks", [])
+            )
+            main_task = crud.create_task(db, schemas.TaskCreate(
+                user_id=user_id,
+                title=title,
+                description=description or f"共 {len(stages_data)} 个阶段",
+                task_type=stages_data[0].get("tasks", [{}])[0].get("task_type", "other") if stages_data else "other",
+                priority="medium",
+                exp_reward=max(total_exp, 10),
+                plan_id=plan.id,
+            ))
+
+            # 为每个阶段的小任务创建子任务（挂到主任务下）
             created_count = 0
             for stage in stages_data:
                 for task_info in stage.get("tasks", []):
                     task_create = schemas.TaskCreate(
                         user_id=user_id,
+                        parent_id=main_task.id,  # 关键：挂到主任务下作为子任务
                         title=task_info.get("title", "未命名任务"),
                         description=task_info.get("description", ""),
                         task_type=task_info.get("task_type", "other"),
@@ -188,8 +225,8 @@ def build_tools(db: Session, user_id: int):
 
             return (
                 f"计划创建成功！\n"
-                f"计划：{plan.title}\n"
-                f"共 {len(stages_data)} 个阶段，已自动创建 {created_count} 个任务。\n"
+                f"主任务：{main_task.title}（可展开查看 {created_count} 个子任务）\n"
+                f"计划：{plan.title} 共 {len(stages_data)} 个阶段\n"
                 f"计划ID: {plan.id}"
             )
         except Exception as e:
@@ -254,6 +291,7 @@ def build_tools(db: Session, user_id: int):
         get_task_detail,
         create_user_task,
         complete_user_task,
+        delete_user_task,
         get_user_stats,
         parse_task_intent,
         create_plan,

@@ -105,10 +105,17 @@ class ChatRequest(BaseModel):
     session_id: Optional[str] = None
 
 
+class ChatStep(BaseModel):
+    type: str  # "thought" | "tool" | "observation" | "error"
+    content: str
+    tool_name: Optional[str] = None
+
+
 class ChatResponse(BaseModel):
     reply: str
     session_id: str
     user_id: int
+    steps: Optional[List[ChatStep]] = None
 
 
 class SessionResponse(BaseModel):
@@ -160,10 +167,39 @@ def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
     agent = build_agent(db, user_id, session_id)
     result = agent.invoke(req.message)
 
+    # 格式化 intermediate_steps 为前端可读的步骤
+    steps = []
+    for step in result.get("intermediate_steps", []):
+        if len(step) < 2:
+            continue
+        action, observation = step[0], step[1]
+        tool_name = getattr(action, "tool", "unknown")
+        tool_input = getattr(action, "tool_input", "")
+
+        if "[ERROR:" in str(observation):
+            steps.append(ChatStep(
+                type="error",
+                content=f"{observation}",
+                tool_name=tool_name,
+            ))
+        else:
+            steps.append(ChatStep(
+                type="tool",
+                content=f"调用 {tool_name}",
+                tool_name=tool_name,
+            ))
+            if observation and str(observation).strip():
+                steps.append(ChatStep(
+                    type="observation",
+                    content=f"{observation}",
+                    tool_name=tool_name,
+                ))
+
     return ChatResponse(
         reply=result["output"],
         session_id=session_id,
         user_id=user_id,
+        steps=steps if steps else None,
     )
 
 
