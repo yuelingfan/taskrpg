@@ -219,6 +219,15 @@ function TopBar() {
           </div>
           <span className="text-[#d4af37] text-sm">{exp}/{expNeeded}</span>
         </div>
+
+        {/* 属性面板 */}
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl border border-[#d4af37]/20 bg-[#0c0c0c]">
+          <span className="text-xs" title="力量">⚔️ {user?.stats?.str_value ?? 10}</span>
+          <span className="text-xs" title="智力">🧠 {user?.stats?.int_value ?? 10}</span>
+          <span className="text-xs" title="耐力">❤️ {user?.stats?.sta_value ?? 10}</span>
+          <span className="text-xs" title="魅力">✨ {user?.stats?.cha_value ?? 10}</span>
+        </div>
+
         <div className="w-10 h-10 rounded-full border border-[#d4af37]/40 bg-gradient-to-br from-[#1a140a] to-[#000]" />
       </div>
     </div>
@@ -493,7 +502,7 @@ function RightPanel() {
                         <TypewriterText text={msg.content} speed={12} />
                       ) : (
                         <div className="text-sm text-[#e7d7b7] prose prose-invert prose-sm max-w-none">
-                          <ReactMarkdown>{msg.content}</ReactMarkdown>
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
                         </div>
                       )}
                     </div>

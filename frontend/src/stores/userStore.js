@@ -5,7 +5,14 @@ export const useUserStore = create((set) => ({
   token: localStorage.getItem('token') || null,
   isAuthenticated: !!localStorage.getItem('token'),
 
-  setUser: (user) => set({ user, isAuthenticated: !!user }),
+  setUser: (user) => {
+    if (user) {
+      localStorage.setItem('user', JSON.stringify(user))
+    } else {
+      localStorage.removeItem('user')
+    }
+    set({ user, isAuthenticated: !!user })
+  },
   setToken: (token) => set({ token, isAuthenticated: !!token }),
 
   logout: () => {

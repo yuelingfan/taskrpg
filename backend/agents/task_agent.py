@@ -1,5 +1,7 @@
 """TaskRPG Agent 定义（集成层级记忆 + 自我反思）"""
+import json
 import os
+from typing import Tuple
 from sqlalchemy.orm import Session
 from langchain.agents import create_openai_tools_agent, AgentExecutor
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -72,7 +74,7 @@ class TaskRPGAgent:
         self.db = db
         self.user_id = user_id
         self.session_id = session_id
-        self.memory_manager = MemoryManager(user_id)
+        self.memory_manager = MemoryManager(user_id, db)
         self.message_history = SQLChatMessageHistory(session_id=session_id, connection=DATABASE_URL)
 
         # 构建 LLM 和工具
@@ -179,21 +181,33 @@ class TaskRPGAgent:
         except Exception as e:
             return f"反思生成失败：{str(e)}。建议检查参数后重试。"
 
+    def _summarize_exchange(self, user_input: str, ai_output: str) -> Tuple[str, str]:
+        """调用 LLM 把一次对话轮次总结为两条摘要"""
+        prompt = f"""把以下对话总结成两条摘要（每条不超过30字）：
+用户：{user_input}
+AI：{ai_output[:500]}
+
+输出格式（严格 JSON）：
+{{
+  "user_summary": "用户的意图/需求的总结",
+  "ai_summary": "AI回复的核心内容的总结"
+}}"""
+        try:
+            response = self.llm.invoke(prompt)
+            result = json.loads(response.content)
+            return result.get("user_summary", user_input[:100]), result.get("ai_summary", ai_output[:100])
+        except Exception as e:
+            print(f"[TaskRPGAgent] Summarize failed: {e}, fallback to truncation")
+            return user_input[:100], ai_output[:100]
+
     def _save_success_memory(self, original_input: str, result: dict):
         """保存成功的执行记录到记忆和对话历史"""
         output = result.get("output", "")
 
-        # 保存到长期记忆
-        self.memory_manager.add_memory(
-            content=f"用户说：{original_input}",
-            source="chat",
-            tags=["user_input"],
-        )
-        self.memory_manager.add_memory(
-            content=f"Agent回复：{output[:200]}",
-            source="chat",
-            tags=["agent_response"],
-        )
+        # 生成总结并保存到长期记忆
+        user_summary, ai_summary = self._summarize_exchange(original_input, output)
+        self.memory_manager.add_memory(speaker="用户", summary=user_summary)
+        self.memory_manager.add_memory(speaker="AI", summary=ai_summary)
 
         # 保存到对话历史（用于后续上下文）
         self.message_history.add_user_message(original_input)
@@ -251,13 +265,12 @@ class TaskRPGAgent:
 
                 # 保存反思到长期记忆（避免反复犯错的关键）
                 self.memory_manager.add_memory(
-                    content=(
+                    speaker="system",
+                    summary=(
                         f"错误反思：处理「{original_input}」时，"
                         f"工具「{failed_tools[0]['tool']}」报错：{failed_tools[0]['error']}。"
                         f"反思结论：{reflection}"
                     ),
-                    source="reflection",
-                    tags=["error_reflection", failed_tools[0]["tool"]],
                 )
 
                 print(f"[TaskRPGAgent] 第{attempt + 1}次尝试失败，反思：{reflection[:60]}...")
@@ -267,13 +280,12 @@ class TaskRPGAgent:
                 reflection_notes.append(final_reflection)
 
                 self.memory_manager.add_memory(
-                    content=(
+                    speaker="system",
+                    summary=(
                         f"错误反思（最终失败）：处理「{original_input}」，"
                         f"经过{max_attempts}次尝试仍未成功。"
                         f"最后错误：{failed_tools[0]['error']}。反思：{final_reflection}"
                     ),
-                    source="reflection",
-                    tags=["error_reflection", "failed", failed_tools[0]["tool"]],
                 )
 
                 print(f"[TaskRPGAgent] 最终失败，已保存反思到记忆")

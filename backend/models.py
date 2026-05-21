@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Enum as SQLEnum, JSON
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Enum as SQLEnum, JSON
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import enum
@@ -39,6 +39,7 @@ class User(Base):
     stats = relationship("UserStats", back_populates="user", uselist=False)
     tasks = relationship("Task", back_populates="user")
     plans = relationship("Plan", back_populates="user")
+    memories = relationship("Memory", back_populates="user")
 
 
 class UserStats(Base):
@@ -112,3 +113,16 @@ class TaskLog(Base):
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
 
     task = relationship("Task", back_populates="logs")
+
+
+class Memory(Base):
+    __tablename__ = "memories"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True)
+    category = Column(String, index=True)
+    speaker = Column(String)
+    summary = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("User", back_populates="memories")

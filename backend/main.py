@@ -267,23 +267,11 @@ def delete_session(session_id: str, db: Session = Depends(get_db)):
 
 # ── Memory routes ────────────────────────────
 
-@app.post("/ai/memory/consolidate")
-def consolidate_memory(user_id: int):
-    """手动触发记忆整理（定期任务入口）"""
-    from memory.memory_manager import MemoryManager
-    mm = MemoryManager(user_id)
-    mm.consolidate_all()
-    # 重新生成各分类总览
-    for cat in mm.store.get_categories():
-        mm.summarize_category(cat)
-    return {"message": "Memory consolidated", "categories": mm.store.get_categories()}
-
-
 @app.get("/ai/memory/summary")
-def get_memory_summary(user_id: int):
+def get_memory_summary(user_id: int, db: Session = Depends(get_db)):
     """获取用户的记忆总览"""
     from memory.memory_manager import MemoryManager
-    mm = MemoryManager(user_id)
+    mm = MemoryManager(user_id, db)
     summary = mm.store.get_summary()
     return {
         "categories": list(summary.keys()),
@@ -293,16 +281,17 @@ def get_memory_summary(user_id: int):
 
 
 @app.get("/ai/memory/{category}")
-def get_memory_detail(user_id: int, category: str):
+def get_memory_detail(user_id: int, category: str, db: Session = Depends(get_db)):
     """获取某分类的详细记忆"""
     from memory.memory_manager import MemoryManager
-    mm = MemoryManager(user_id)
-    blocks = mm.store.get_detail_blocks(category)
-    memories = mm.store.get_all_detail_memories(category)
+    mm = MemoryManager(user_id, db)
+    memories = mm.store.get_memories(category=category)
     return {
         "category": category,
-        "time_blocks": blocks,
-        "memories": [{"id": m.id, "content": m.content, "time": m.created_at} for m in memories],
+        "memories": [
+            {"id": m.id, "speaker": m.speaker, "summary": m.summary, "time": m.created_at.isoformat() if m.created_at else ""}
+            for m in memories
+        ],
     }
 
 
