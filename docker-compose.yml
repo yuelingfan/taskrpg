@@ -1,0 +1,65 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: taskrpg-db
+    environment:
+      POSTGRES_USER: ${DB_USER:-taskrpg}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-taskrpg_secret}
+      POSTGRES_DB: ${DB_NAME:-taskrpg}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-taskrpg} -d ${DB_NAME:-taskrpg}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: taskrpg-backend
+    environment:
+      DATABASE_URL: postgresql+psycopg://${DB_USER:-taskrpg}:${DB_PASSWORD:-taskrpg_secret}@postgres:5432/${DB_NAME:-taskrpg}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL}
+      JWT_SECRET: ${JWT_SECRET:-taskrpg-change-me-in-production}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  nginx:
+    image: nginx:alpine
+    container_name: taskrpg-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./frontend/dist:/usr/share/nginx/html:ro
+    depends_on:
+      - backend
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+volumes:
+  postgres_data:

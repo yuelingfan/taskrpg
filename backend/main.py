@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -17,16 +18,23 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="TaskRPG API", version="1.0.0")
 
+# CORS: allow all origins in production (nginx handles same-origin), or configure via env
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*")
+if CORS_ORIGINS == "*":
+    _origins = ["*"]
+else:
+    _origins = [o.strip() for o in CORS_ORIGINS.split(",")]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # JWT config
-SECRET_KEY = "taskrpg-secret-key-change-in-production"
+SECRET_KEY = os.getenv("JWT_SECRET", "taskrpg-secret-key-change-in-production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_DAYS = 7
 
