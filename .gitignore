@@ -42,6 +42,12 @@ memory_data/
 *.sqlite
 *.sqlite3
 
+# Deployment configs (server-side only)
+docker-compose.yml
+backend/Dockerfile
+nginx.conf
+DEPLOY.md
+
 # IDE
 .vscode/
 .idea/
