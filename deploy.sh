@@ -44,13 +44,22 @@ log_info "项目目录: ${PROJECT_DIR}"
 
 cd "${PROJECT_DIR}"
 
-# 检查必要命令
-for cmd in git docker docker-compose node npm; do
+# 检查必要命令（docker compose 新版插件命令）
+for cmd in git docker node npm; do
     if ! command -v "$cmd" &> /dev/null; then
         log_error "缺少必要命令: $cmd，请先安装"
         exit 1
     fi
 done
+
+# 检查 docker compose 插件是否可用
+if ! docker compose version &> /dev/null; then
+    log_error "缺少 docker compose 插件，请执行: sudo apt install -y docker-compose-plugin"
+    exit 1
+fi
+
+# 设置 docker compose 命令别名
+DOCKER_COMPOSE="docker compose"
 
 # 检查 .env 文件是否存在
 if [ ! -f "backend/.env" ]; then
@@ -131,7 +140,7 @@ log_info "停止旧容器..."
 
 cd "${PROJECT_DIR}"
 
-docker-compose down
+${DOCKER_COMPOSE} down
 
 # 清理 dangling 镜像（可选，释放磁盘空间）
 DANGLING_IMAGES=$(docker images -f "dangling=true" -q)
@@ -145,7 +154,7 @@ fi
 # =============================================================================
 log_info "重新构建并启动 Docker 容器..."
 
-docker-compose up -d --build
+${DOCKER_COMPOSE} up -d --build
 
 # 等待后端健康检查
 log_info "等待后端服务就绪..."
@@ -167,10 +176,10 @@ done
 log_info "执行健康检查..."
 
 # 检查容器运行状态
-RUNNING_CONTAINERS=$(docker-compose ps -q | wc -l)
+RUNNING_CONTAINERS=$(${DOCKER_COMPOSE} ps -q | wc -l)
 if [ "$RUNNING_CONTAINERS" -lt 3 ]; then
     log_error "部分容器未正常运行，当前运行容器数: ${RUNNING_CONTAINERS}"
-    docker-compose ps
+    ${DOCKER_COMPOSE} ps
     exit 1
 fi
 
@@ -192,6 +201,6 @@ log_success "=========================================="
 log_info "当前版本: ${CURRENT_COMMIT}"
 log_info "访问地址: http://$(curl -s ifconfig.me || echo 'your-server-ip')"
 log_info "后端 API: http://$(curl -s ifconfig.me || echo 'your-server-ip'):8000"
-log_info "查看日志: docker-compose logs -f backend"
-log_info "停止服务: docker-compose down"
-log_info "重启服务: docker-compose restart"
+log_info "查看日志: ${DOCKER_COMPOSE} logs -f backend"
+log_info "停止服务: ${DOCKER_COMPOSE} down"
+log_info "重启服务: ${DOCKER_COMPOSE} restart"
