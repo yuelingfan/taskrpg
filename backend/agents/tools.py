@@ -119,6 +119,28 @@ def build_tools(db: Session, user_id: int):
         return "[ERROR:delete_user_task] 删除任务失败。"
 
     @tool
+    def delete_subtask(subtask_id: int) -> str:
+        """删除指定的子任务（不会删除父任务）。
+        当用户说"删除某个大任务下的某个子任务"时使用此工具。
+        """
+        subtask = db.query(models.Task).filter(
+            models.Task.id == subtask_id,
+            models.Task.user_id == user_id,
+            models.Task.parent_id != None
+        ).first()
+        if not subtask:
+            return f"找不到子任务 #{subtask_id}，或该任务不是子任务。"
+
+        parent = db.query(models.Task).filter(models.Task.id == subtask.parent_id).first()
+        parent_title = parent.title if parent else "未知"
+        title = subtask.title
+
+        success = crud.delete_task(db, subtask_id)
+        if success:
+            return f"子任务「{title}」（属于「{parent_title}」）已删除。"
+        return "[ERROR:delete_subtask] 删除子任务失败。"
+
+    @tool
     def get_user_stats() -> str:
         """获取用户当前等级、经验值和属性。"""
         db_user = crud.get_user(db, user_id)
@@ -297,4 +319,5 @@ def build_tools(db: Session, user_id: int):
         create_plan,
         get_plan_progress,
         get_user_plans,
+        delete_subtask,
     ]

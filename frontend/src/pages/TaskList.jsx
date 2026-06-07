@@ -308,7 +308,7 @@ export default function TaskList() {
                           </p>
                           <div className="ml-4 pl-4 border-l-2 border-[#d4af37]/20 space-y-2">
                             {subTasksMap[task.id].map((sub) => (
-                              <div key={sub.id} className="flex items-center gap-3">
+                              <div key={sub.id} className="flex items-center gap-3 group">
                                 <button
                                   onClick={() => {
                                     if (sub.status !== 'done') {
@@ -327,13 +327,22 @@ export default function TaskList() {
                                 </button>
                                 <span
                                   className={clsx(
-                                    'text-sm text-[#b89b5e]',
+                                    'text-sm text-[#b89b5e] flex-1',
                                     sub.status === 'done' && 'line-through opacity-50'
                                   )}
                                 >
                                   {sub.title}
                                 </span>
                                 <span className="text-[10px] text-[#d4af37]">+5 XP</span>
+                                <button
+                                  onClick={() => deleteMutation.mutate(sub.id)}
+                                  className="opacity-0 group-hover:opacity-100 p-1 text-red-400/60 hover:text-red-400 hover:bg-red-400/10 rounded transition-all"
+                                  title="删除子任务"
+                                >
+                                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                  </svg>
+                                </button>
                               </div>
                             ))}
                           </div>
