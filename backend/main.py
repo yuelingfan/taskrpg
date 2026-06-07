@@ -1,11 +1,13 @@
 import os
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import List, Optional, AsyncGenerator
 from datetime import datetime, timedelta
 from jose import JWTError, jwt
 from pydantic import BaseModel
+import asyncio
 from database import engine, get_db, Base
 import models, schemas, crud
 from ai_service import parse_task_from_text
@@ -113,6 +115,12 @@ class ChatRequest(BaseModel):
     session_id: Optional[str] = None
 
 
+class ChatStreamRequest(BaseModel):
+    message: str
+    user_id: int
+    session_id: Optional[str] = None
+
+
 class ChatStep(BaseModel):
     type: str  # "thought" | "tool" | "observation" | "error"
     content: str
@@ -132,9 +140,8 @@ class SessionResponse(BaseModel):
     created_at: datetime
 
 
-@app.post("/ai/chat", response_model=ChatResponse)
-def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
-    # 确保用户存在（复用 create_task 中的逻辑）
+def _ensure_user_and_session(db: Session, req):
+    """确保用户存在，返回 (user_id, session_id, is_new_session)"""
     db_user = crud.get_user(db, req.user_id)
     user_id = req.user_id
     if not db_user:
@@ -152,9 +159,9 @@ def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
         user_id = db_user.id
 
     session_id = req.session_id or str(uuid.uuid4())
+    is_new_session = not req.session_id
 
-    # 如果是新会话，创建记录
-    if not req.session_id:
+    if is_new_session:
         db_session = models.ChatSession(
             id=session_id,
             user_id=user_id,
@@ -163,7 +170,6 @@ def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
         db.add(db_session)
         db.commit()
     else:
-        # 更新会话时间
         db_session = db.query(models.ChatSession).filter(
             models.ChatSession.id == session_id
         ).first()
@@ -171,43 +177,115 @@ def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
             db_session.updated_at = datetime.utcnow()
             db.commit()
 
-    # 构建 Agent 并执行（同步调用，自动注入层级记忆）
-    agent = build_agent(db, user_id, session_id)
-    result = agent.invoke(req.message)
+    return user_id, session_id, is_new_session
 
-    # 格式化 intermediate_steps 为前端可读的步骤
+
+def _format_steps(result: dict) -> list:
+    """格式化 intermediate_steps 为前端可读的步骤"""
     steps = []
     for step in result.get("intermediate_steps", []):
         if len(step) < 2:
             continue
         action, observation = step[0], step[1]
         tool_name = getattr(action, "tool", "unknown")
-        tool_input = getattr(action, "tool_input", "")
 
         if "[ERROR:" in str(observation):
-            steps.append(ChatStep(
-                type="error",
-                content=f"{observation}",
-                tool_name=tool_name,
-            ))
+            steps.append({
+                "type": "error",
+                "content": f"{observation}",
+                "tool_name": tool_name,
+            })
         else:
-            steps.append(ChatStep(
-                type="tool",
-                content=f"调用 {tool_name}",
-                tool_name=tool_name,
-            ))
+            steps.append({
+                "type": "tool",
+                "content": f"调用 {tool_name}",
+                "tool_name": tool_name,
+            })
             if observation and str(observation).strip():
-                steps.append(ChatStep(
-                    type="observation",
-                    content=f"{observation}",
-                    tool_name=tool_name,
-                ))
+                steps.append({
+                    "type": "observation",
+                    "content": f"{observation}",
+                    "tool_name": tool_name,
+                })
+    return steps
+
+
+@app.post("/ai/chat", response_model=ChatResponse)
+def ai_chat(req: ChatRequest, db: Session = Depends(get_db)):
+    user_id, session_id, _ = _ensure_user_and_session(db, req)
+
+    # 构建 Agent 并执行（同步调用，自动注入层级记忆）
+    agent = build_agent(db, user_id, session_id)
+    result = agent.invoke(req.message)
+    steps = _format_steps(result)
 
     return ChatResponse(
         reply=result["output"],
         session_id=session_id,
         user_id=user_id,
         steps=steps if steps else None,
+    )
+
+
+@app.post("/ai/chat/stream")
+async def ai_chat_stream(req: ChatStreamRequest, db: Session = Depends(get_db)):
+    """SSE 流式聊天接口
+
+    事件类型：
+    - status:   状态更新（started / thinking / retrying）
+    - tool:     工具调用（包含 tool_name, input, status）
+    - thought:  Agent 思考内容
+    - token:    最终输出的字符流
+    - done:     完成（包含 session_id, user_id）
+    - error:    错误
+    """
+    user_id, session_id, _ = _ensure_user_and_session(db, req)
+
+    async def event_generator() -> AsyncGenerator[str, None]:
+        try:
+            # 发送开始事件
+            yield f"event: status\ndata: {json.dumps({'type': 'started'}, ensure_ascii=False)}\n\n"
+
+            # 构建 Agent
+            agent = build_agent(db, user_id, session_id)
+
+            # 发送思考中状态
+            yield f"event: status\ndata: {json.dumps({'type': 'thinking'}, ensure_ascii=False)}\n\n"
+
+            # 在后台线程执行同步 Agent（避免阻塞事件循环）
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(None, lambda: agent.invoke(req.message))
+
+            # 发送中间步骤
+            steps = _format_steps(result)
+            for step in steps:
+                event_type = step["type"]  # tool / observation / error
+                yield f"event: {event_type}\ndata: {json.dumps(step, ensure_ascii=False)}\n\n"
+                # 微小延迟让前端有"流式"感觉
+                await asyncio.sleep(0.03)
+
+            # 流式输出最终回复（按字符切分）
+            output = result.get("output", "")
+            if output:
+                for i, char in enumerate(output):
+                    yield f"event: token\ndata: {json.dumps({'content': char, 'is_first': i == 0, 'is_last': i == len(output) - 1}, ensure_ascii=False)}\n\n"
+                    await asyncio.sleep(0.015)  # 打字机速度
+
+            # 发送完成事件
+            yield f"event: done\ndata: {json.dumps({'session_id': session_id, 'user_id': user_id}, ensure_ascii=False)}\n\n"
+
+        except Exception as e:
+            error_data = json.dumps({"message": str(e), "code": "INTERNAL_ERROR"}, ensure_ascii=False)
+            yield f"event: error\ndata: {error_data}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        }
     )
 
 

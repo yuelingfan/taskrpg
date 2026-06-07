@@ -12,48 +12,10 @@ import { useUserStore } from './stores/userStore'
 import { taskApi, aiApi } from './lib/api'
 import clsx from 'clsx'
 
-// 打字机效果组件（完成后渲染 Markdown）
-function TypewriterText({ text, speed = 15 }) {
-  const [displayed, setDisplayed] = useState('')
-  const [done, setDone] = useState(false)
-  const indexRef = useRef(0)
+// AI 思考步骤组件 —— 可展开/收起
+function ThinkingSteps({ steps, defaultExpanded = false }) {
+  const [expanded, setExpanded] = useState(defaultExpanded)
 
-  useEffect(() => {
-    setDisplayed('')
-    setDone(false)
-    indexRef.current = 0
-
-    const timer = setInterval(() => {
-      if (indexRef.current < text.length) {
-        indexRef.current += 1
-        setDisplayed(text.slice(0, indexRef.current))
-      } else {
-        clearInterval(timer)
-        setDone(true)
-      }
-    }, speed)
-
-    return () => clearInterval(timer)
-  }, [text, speed])
-
-  if (done) {
-    return (
-      <div className="prose prose-invert prose-sm max-w-none">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
-      </div>
-    )
-  }
-
-  return (
-    <span className="text-sm text-[#e7d7b7] whitespace-pre-wrap">
-      {displayed}
-      <span className="inline-block w-0.5 h-4 bg-[#d4af37] ml-0.5 animate-pulse" />
-    </span>
-  )
-}
-
-// AI 思考步骤组件
-function ThinkingSteps({ steps }) {
   if (!steps || steps.length === 0) return null
 
   const stepIcons = {
@@ -63,20 +25,42 @@ function ThinkingSteps({ steps }) {
     thought: '💭',
   }
 
+  const toolCount = steps.filter(s => s.type === 'tool').length
+  const errorCount = steps.filter(s => s.type === 'error').length
+
   return (
-    <div className="mb-2 space-y-1">
-      {steps.map((step, idx) => (
-        <div
-          key={idx}
-          className={clsx(
-            'flex items-start gap-1.5 text-[11px] px-2 py-1 rounded',
-            step.type === 'error' ? 'text-red-400/80 bg-red-400/5' : 'text-[#b89b5e]/70'
-          )}
-        >
-          <span className="mt-0.5">{stepIcons[step.type] || '•'}</span>
-          <span className="flex-1 truncate">{step.content}</span>
+    <div className="mb-2">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-1.5 text-[11px] text-[#b89b5e]/70 hover:text-[#d4af37] transition-colors mb-1"
+      >
+        <span className="transition-transform duration-200" style={{ transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
+        <span>
+          {errorCount > 0
+            ? `思考过程 (${toolCount} 个工具 · ${errorCount} 个错误)`
+            : `思考过程 (${toolCount} 个工具)`
+          }
+        </span>
+      </button>
+
+      {expanded && (
+        <div className="space-y-1 pl-4 border-l-2 border-[#d4af37]/10">
+          {steps.map((step, idx) => (
+            <div
+              key={idx}
+              className={clsx(
+                'flex items-start gap-1.5 text-[11px] px-2 py-1 rounded',
+                step.type === 'error' ? 'text-red-400/80 bg-red-400/5' :
+                step.type === 'observation' ? 'text-[#b89b5e]/60' :
+                'text-[#b89b5e]/70'
+              )}
+            >
+              <span className="mt-0.5 shrink-0">{stepIcons[step.type] || '•'}</span>
+              <span className="flex-1 break-words">{step.content}</span>
+            </div>
+          ))}
         </div>
-      ))}
+      )}
     </div>
   )
 }
@@ -252,10 +236,16 @@ function RightPanel() {
   const addTask = useAppStore((s) => s.addTask)
   const queryClient = useQueryClient()
   const sessionDropdownRef = useRef(null)
+  const abortControllerRef = useRef(null)
   const [messages, setMessages] = useState([])
   const [aiSessionId, setAiSessionId] = useState(null)
   const [sessions, setSessions] = useState([])
   const [showSessions, setShowSessions] = useState(false)
+
+  // 流式聊天状态
+  const [streamingMsg, setStreamingMsg] = useState(null)
+  // streamingMsg 结构：
+  // { role: 'ai', content: '', steps: [], isStreaming: true, isThinking: true }
 
   // 点击外部关闭会话下拉
   useEffect(() => {
@@ -314,42 +304,132 @@ function RightPanel() {
     }
   }, [aiSessionId])
 
-  const chatMutation = useMutation({
-    mutationFn: ({ message, userId, sessionId }) => aiApi.chat(message, userId, sessionId),
-    onMutate: () => {
-      setAiLoading(true)
-    },
-    onSuccess: (data) => {
-      setAiLoading(false)
-      if (data.session_id) {
-        setAiSessionId(data.session_id)
+  const handleSummon = async () => {
+    if (!aiInput.trim() || !currentUserId || streamingMsg) return
+    const userMsg = aiInput.trim()
+
+    // 添加用户消息
+    setMessages((prev) => [...prev, { role: 'user', content: userMsg }])
+    setAiInput('')
+    setAiLoading(true)
+
+    // 初始化流式 AI 消息
+    setStreamingMsg({
+      role: 'ai',
+      content: '',
+      steps: [],
+      isStreaming: true,
+      isThinking: true,
+    })
+
+    try {
+      const sse = aiApi.chatStream(userMsg, currentUserId, aiSessionId)
+      abortControllerRef.current = sse.controller
+
+      let finalSessionId = aiSessionId
+      let finalUserId = currentUserId
+      let accumulatedSteps = []
+      let accumulatedContent = ''
+
+      for await (const { event, data } of sse) {
+        switch (event) {
+          case 'status':
+            if (data.type === 'started') {
+              // 连接成功，开始执行
+            } else if (data.type === 'thinking') {
+              setStreamingMsg((prev) => prev ? { ...prev, isThinking: true } : null)
+            }
+            break
+
+          case 'tool':
+          case 'observation':
+            accumulatedSteps.push(data)
+            setStreamingMsg((prev) =>
+              prev ? { ...prev, steps: [...accumulatedSteps], isThinking: true } : null
+            )
+            break
+
+          case 'error':
+            // 区分工具错误和SSE连接错误
+            if (data.tool_name || (data.content && data.content.includes('[ERROR:'))) {
+              // 工具执行错误
+              accumulatedSteps.push(data)
+              setStreamingMsg((prev) =>
+                prev ? { ...prev, steps: [...accumulatedSteps], isThinking: true } : null
+              )
+            } else {
+              // SSE 连接/服务端错误
+              setMessages((prev) => [
+                ...prev,
+                { role: 'ai', content: `❌ 错误：${data.message || '未知错误'}`, isError: true },
+              ])
+              setStreamingMsg(null)
+              setAiLoading(false)
+              return
+            }
+            break
+
+          case 'token':
+            accumulatedContent += data.content
+            setStreamingMsg((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    content: accumulatedContent,
+                    isThinking: false,
+                  }
+                : null
+            )
+            break
+
+          case 'done':
+            finalSessionId = data.session_id || finalSessionId
+            finalUserId = data.user_id || finalUserId
+            break
+        }
       }
-      // 如果后端返回了新的 user_id（自动创建用户），更新前端
-      if (data.user_id && data.user_id !== currentUserId) {
-        setCurrentUserId(data.user_id)
-      }
+
+      // SSE 流结束，保存最终消息到历史
       setMessages((prev) => [
         ...prev,
-        { role: 'ai', content: data.reply, steps: data.steps || [] },
+        {
+          role: 'ai',
+          content: accumulatedContent || '（无回复内容）',
+          steps: accumulatedSteps,
+        },
       ])
-      setAiInput('')
+      setStreamingMsg(null)
+      setAiLoading(false)
+
+      if (finalSessionId) {
+        setAiSessionId(finalSessionId)
+      }
+      if (finalUserId && finalUserId !== currentUserId) {
+        setCurrentUserId(finalUserId)
+      }
+
       // 刷新任务列表（Agent 可能创建了任务）
       queryClient.invalidateQueries({ queryKey: ['tasks'] })
-    },
-    onError: (err) => {
-      setAiLoading(false)
-      setMessages((prev) => [
-        ...prev,
-        { role: 'ai', content: err.response?.data?.detail || '召唤失败，请稍后重试' },
-      ])
-    },
-  })
 
-  const handleSummon = () => {
-    if (!aiInput.trim() || !currentUserId) return
-    const userMsg = aiInput.trim()
-    setMessages((prev) => [...prev, { role: 'user', content: userMsg }])
-    chatMutation.mutate({ message: userMsg, userId: currentUserId, sessionId: aiSessionId })
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        setMessages((prev) => [
+          ...prev,
+          { role: 'ai', content: err.message || '召唤失败，请稍后重试', isError: true },
+        ])
+      }
+      setStreamingMsg(null)
+      setAiLoading(false)
+    }
+  }
+
+  const handleCancel = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+      abortControllerRef.current = null
+    }
+    setStreamingMsg(null)
+    setAiLoading(false)
   }
 
   const handleCreateTask = async (task) => {
@@ -473,7 +553,7 @@ function RightPanel() {
 
         {/* 聊天记录区域 */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-[280px]">
-          {messages.length === 0 && (
+          {messages.length === 0 && !streamingMsg && (
             <div className="h-full flex flex-col items-center justify-center text-center py-8">
               <div className="text-3xl mb-2">✨</div>
               <p className="text-xs text-[#b89b5e]">在下方输入你的计划或意图</p>
@@ -481,6 +561,7 @@ function RightPanel() {
             </div>
           )}
 
+          {/* 历史消息 */}
           {messages.map((msg, idx) => (
             <div key={idx}>
               {msg.role === 'user' ? (
@@ -493,18 +574,14 @@ function RightPanel() {
                 <div className="flex justify-start">
                   <div className="max-w-[90%] w-full">
                     <div className="bg-[#050505] border border-[#d4af37]/10 rounded-xl rounded-tl-sm px-3 py-2">
-                      {/* 思考步骤 */}
+                      {/* 思考步骤 — 历史消息默认收起 */}
                       {msg.steps && msg.steps.length > 0 && (
-                        <ThinkingSteps steps={msg.steps} />
+                        <ThinkingSteps steps={msg.steps} defaultExpanded={false} />
                       )}
-                      {/* 最终回复 — 历史消息直接渲染 Markdown，最新消息用打字机 */}
-                      {idx === messages.length - 1 && msg.steps ? (
-                        <TypewriterText text={msg.content} speed={12} />
-                      ) : (
-                        <div className="text-sm text-[#e7d7b7] prose prose-invert prose-sm max-w-none">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
-                        </div>
-                      )}
+                      {/* 最终回复 — 渲染 Markdown */}
+                      <div className="text-sm text-[#e7d7b7] prose prose-invert prose-sm max-w-none">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -512,11 +589,29 @@ function RightPanel() {
             </div>
           ))}
 
-          {aiLoading && (
+          {/* 流式消息（正在接收中） */}
+          {streamingMsg && (
             <div className="flex justify-start">
-              <div className="bg-[#050505] border border-[#d4af37]/10 rounded-xl rounded-tl-sm px-3 py-2 flex items-center gap-2">
-                <span className="w-3 h-3 border-2 border-[#d4af37]/30 border-t-[#d4af37] rounded-full animate-spin" />
-                <span className="text-xs text-[#b89b5e]">AI 解析中...</span>
+              <div className="max-w-[90%] w-full">
+                <div className="bg-[#050505] border border-[#d4af37]/10 rounded-xl rounded-tl-sm px-3 py-2">
+                  {/* 思考步骤 — 流式中默认展开 */}
+                  {streamingMsg.steps && streamingMsg.steps.length > 0 && (
+                    <ThinkingSteps steps={streamingMsg.steps} defaultExpanded={true} />
+                  )}
+
+                  {/* 思考中 / 流式输出中 */}
+                  {streamingMsg.isThinking ? (
+                    <div className="flex items-center gap-2 text-xs text-[#b89b5e]">
+                      <span className="w-2 h-2 border-2 border-[#d4af37]/30 border-t-[#d4af37] rounded-full animate-spin" />
+                      <span>AI 思考中{streamingMsg.steps.length > 0 ? `（已调用 ${streamingMsg.steps.filter(s => s.type === 'tool').length} 个工具）` : '...'}</span>
+                    </div>
+                  ) : (
+                    <span className="text-sm text-[#e7d7b7] whitespace-pre-wrap">
+                      {streamingMsg.content}
+                      <span className="inline-block w-0.5 h-4 bg-[#d4af37] ml-0.5 animate-pulse" />
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
           )}
@@ -529,17 +624,26 @@ function RightPanel() {
               value={aiInput}
               onChange={(e) => setAiInput(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleSummon()}
-              disabled={aiLoading}
+              disabled={!!streamingMsg || aiLoading}
               className="flex-1 bg-[#050505] border border-[#d4af37]/20 rounded-lg px-3 py-2 text-sm outline-none text-[#e7d7b7] placeholder-[#b89b5e]/50 focus:border-[#d4af37]/50 transition-colors disabled:opacity-50"
               placeholder="输入你的意图..."
             />
-            <button
-              onClick={handleSummon}
-              disabled={aiLoading || !aiInput.trim()}
-              className="px-4 py-2 rounded-lg bg-[#d4af37]/10 text-[#d4af37] border border-[#d4af37]/30 hover:bg-[#d4af37]/20 disabled:opacity-50 transition-colors text-sm"
-            >
-              发送
-            </button>
+            {streamingMsg ? (
+              <button
+                onClick={handleCancel}
+                className="px-4 py-2 rounded-lg bg-red-500/10 text-red-400 border border-red-500/30 hover:bg-red-500/20 transition-colors text-sm"
+              >
+                停止
+              </button>
+            ) : (
+              <button
+                onClick={handleSummon}
+                disabled={aiLoading || !aiInput.trim()}
+                className="px-4 py-2 rounded-lg bg-[#d4af37]/10 text-[#d4af37] border border-[#d4af37]/30 hover:bg-[#d4af37]/20 disabled:opacity-50 transition-colors text-sm"
+              >
+                发送
+              </button>
+            )}
           </div>
         </div>
       </div>
