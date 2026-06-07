@@ -25,16 +25,23 @@ jobs:
 
       # ---------- 3. 添加服务器到 known_hosts ----------
       - name: Add server to known_hosts
+        env:
+          SERVER_HOST: 47.116.96.61
         run: |
           mkdir -p ~/.ssh
-          ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H ${SERVER_HOST} >> ~/.ssh/known_hosts
 
       # ---------- 4. 执行远程部署 ----------
       - name: Deploy to server
+        env:
+          SERVER_HOST: 47.116.96.61
+          SERVER_USER: admin
+          PROJECT_PATH: /opt/taskrpg
         run: |
           echo ">>> 连接服务器执行部署..."
-          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
-            "bash ${{ secrets.PROJECT_PATH }}/deploy.sh"
+          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30 \
+            ${SERVER_USER}@${SERVER_HOST} \
+            "bash ${PROJECT_PATH}/deploy.sh"
 
       # ---------- 5. 通知结果 ----------
       - name: Notify success
