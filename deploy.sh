@@ -87,17 +87,21 @@ if [ ! -d ".git" ]; then
     exit 1
 fi
 
-# 保存本地未提交的修改（可选）
-if [ -n "$(git status --porcelain)" ]; then
-    log_warn "检测到本地有未提交的修改"
+# 保存本地未提交的修改（可选），但排除 .env 等本地配置文件
+# 先检查是否有非配置文件的修改
+NON_CONFIG_CHANGES=$(git status --porcelain | grep -v "^[?][?] backend/\.env$" | grep -v "^ M backend/\.env$" || true)
+
+if [ -n "$NON_CONFIG_CHANGES" ]; then
+    log_warn "检测到本地有未提交的代码修改"
     read -p "是否保存本地修改并继续？[Y/n] " -n 1 -r
     echo
     if [[ $REPLY =~ ^[Nn]$ ]]; then
         log_info "取消部署"
         exit 0
     fi
-    git stash push -m "deploy-auto-stash-$(date +%Y%m%d-%H%M%S)"
-    log_info "本地修改已保存到 stash"
+    # 只 stash 非 .env 的修改
+    git stash push --include-untracked -m "deploy-auto-stash-$(date +%Y%m%d-%H%M%S)"
+    log_info "本地代码修改已保存到 stash（.env 等配置文件保留）"
 fi
 
 git fetch origin
