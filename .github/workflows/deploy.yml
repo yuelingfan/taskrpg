@@ -1,0 +1,46 @@
+name: Deploy to Server
+
+on:
+  push:
+    branches: [main]
+  # 也支持手动触发
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy to Remote Server
+    runs-on: ubuntu-latest
+
+    steps:
+      # ---------- 1. 检出代码 ----------
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ---------- 2. 设置 SSH ----------
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+          log-public-key: false
+
+      # ---------- 3. 添加服务器到 known_hosts ----------
+      - name: Add server to known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
+
+      # ---------- 4. 执行远程部署 ----------
+      - name: Deploy to server
+        run: |
+          echo ">>> 连接服务器执行部署..."
+          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+            "bash ${{ secrets.PROJECT_PATH }}/deploy.sh"
+
+      # ---------- 5. 通知结果 ----------
+      - name: Notify success
+        if: success()
+        run: echo "✅ 部署成功！"
+
+      - name: Notify failure
+        if: failure()
+        run: echo "❌ 部署失败，请检查服务器日志"
