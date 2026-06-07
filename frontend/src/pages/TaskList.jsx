@@ -22,7 +22,6 @@ export default function TaskList() {
   const { user, setUser } = useUserStore()
   const [newTaskTitle, setNewTaskTitle] = useState('')
   const [newTaskDesc, setNewTaskDesc] = useState('')
-  const [newTaskDeadline, setNewTaskDeadline] = useState('')
   const [newTaskTier, setNewTaskTier] = useState('normal')
   const [showDone, setShowDone] = useState(false)
   const [expandedTaskId, setExpandedTaskId] = useState(null)
@@ -33,7 +32,6 @@ export default function TaskList() {
       addTask(data)
       setNewTaskTitle('')
       setNewTaskDesc('')
-      setNewTaskDeadline('')
     },
   })
 
@@ -71,7 +69,6 @@ export default function TaskList() {
       title: newTaskTitle.trim(),
       description: newTaskDesc.trim() || undefined,
       priority: 'medium',
-      deadline: newTaskDeadline ? new Date(newTaskDeadline).toISOString() : null,
       exp_reward: tier.xp,
     })
   }
@@ -116,12 +113,6 @@ export default function TaskList() {
             className="w-full px-4 py-3 bg-[#050505] border border-[#d4af37]/20 rounded-xl text-[#e7d7b7] placeholder-[#b89b5e]/50 focus:outline-none focus:border-[#d4af37]/50 transition-colors resize-none text-sm"
           />
           <div className="flex gap-3">
-            <input
-              type="date"
-              value={newTaskDeadline}
-              onChange={(e) => setNewTaskDeadline(e.target.value)}
-              className="px-4 py-2 bg-[#050505] border border-[#d4af37]/20 rounded-xl text-[#e7d7b7] text-sm focus:outline-none focus:border-[#d4af37]/50 transition-colors"
-            />
             <div className="flex gap-2 flex-1">
               {Object.entries(QUEST_TIERS).map(([key, tier]) => (
                 <button
@@ -262,16 +253,6 @@ export default function TaskList() {
                         <span className={clsx('px-2 py-0.5 text-xs rounded', tier.bg, tier.color)}>
                           {tier.label}
                         </span>
-                        {task.deadline && (
-                          <span className={clsx(
-                            'px-2 py-0.5 text-xs rounded bg-red-400/10',
-                            new Date(task.deadline) < new Date() && task.status !== 'done'
-                              ? 'text-red-400'
-                              : 'text-[#b89b5e]'
-                          )}>
-                            📅 {new Date(task.deadline).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })}
-                          </span>
-                        )}
                         {task.status !== 'done' && (
                           <span className="ml-auto text-[#d4af37] text-sm font-medium">
                             +{expReward} XP
